@@ -44,17 +44,25 @@ namespace modules {
     }
 
     // Make capacity reader
-    if ((m_fcapnow = file_util::pick({path_battery + "charge_now", path_battery + "energy_now"})).empty()) {
-      throw module_error("No suitable way to get current capacity value");
+    // HACK: pinebook pro battery uses a fuel gauge that only exposes capacity. Maybe this should be faked out in the driver instead???
+    if ((m_fcapnow = file_util::pick({path_battery + "charge_now", path_battery + "energy_now", path_battery + "capacity"})).empty()) {
+        throw module_error("No suitable way to get current capacity value");
     } else if ((m_fcapfull = file_util::pick({path_battery + "charge_full", path_battery + "energy_full"})).empty()) {
       throw module_error("No suitable way to get max capacity value");
     }
 
-    m_capacity_reader = make_unique<capacity_reader>([=] {
-      auto cap_now = std::strtoul(file_util::contents(m_fcapnow).c_str(), nullptr, 10);
-      auto cap_max = std::strtoul(file_util::contents(m_fcapfull).c_str(), nullptr, 10);
-      return math_util::percentage(cap_now, 0UL, cap_max);
-    });
+    if(string_util::contains(m_fcapnow, "capacity")) {
+      m_capacity_reader = make_unique<capacity_reader>([=] {
+        return std::strtoul(file_util::contents(m_fcapnow).c_str(), nullptr, 10);
+      });
+    }
+    else {
+      m_capacity_reader = make_unique<capacity_reader>([=] {
+        auto cap_now = std::strtoul(file_util::contents(m_fcapnow).c_str(), nullptr, 10);
+        auto cap_max = std::strtoul(file_util::contents(m_fcapfull).c_str(), nullptr, 10);
+        return math_util::percentage(cap_now, 0UL, cap_max);
+      });
+    }
 
     // Make rate reader
     if ((m_fvoltage = file_util::pick({path_battery + "voltage_now"})).empty()) {
@@ -66,10 +74,17 @@ namespace modules {
     m_rate_reader = make_unique<rate_reader>([this] {
       unsigned long rate{std::strtoul(file_util::contents(m_frate).c_str(), nullptr, 10)};
       unsigned long volt{std::strtoul(file_util::contents(m_fvoltage).c_str(), nullptr, 10) / 1000UL};
-      unsigned long now{std::strtoul(file_util::contents(m_fcapnow).c_str(), nullptr, 10)};
-      unsigned long max{std::strtoul(file_util::contents(m_fcapfull).c_str(), nullptr, 10)};
-      unsigned long cap{read(*m_state_reader) ? max - now : now};
 
+      unsigned long max{std::strtoul(file_util::contents(m_fcapfull).c_str(), nullptr, 10)};
+      unsigned long now = 0;
+      if(string_util::contains(m_fcapnow, "capacity")) {
+        unsigned long percent_now{std::strtoul(file_util::contents(m_fcapnow).c_str(), nullptr, 10)};
+        now = (max * percent_now) / 100;
+      }
+      else {
+        now = std::strtoul(file_util::contents(m_fcapnow).c_str(), nullptr, 10);
+      }
+      unsigned long cap{read(*m_state_reader) ? max - now : now};
       if (rate && volt && cap) {
         auto remaining = (cap / volt);
         auto current_rate = (rate / volt);
